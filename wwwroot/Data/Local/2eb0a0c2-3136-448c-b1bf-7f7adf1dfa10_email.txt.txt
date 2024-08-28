@@ -1,0 +1,45 @@
+
+CURL : 
+curl --location 'https://api.us.webexconnect.io/v2/messages' \
+--header 'Content-Type: application/json' \
+--header 'accept: application/json' \
+--header 'key: 4d060b06-2177-11ef-ac2a-02b7e040ae47' \
+--data-raw '{
+    "channel": "email",
+    "from": "mailto:wxconnectsupport@consiliuminc.com",
+    
+    "multipleToRecipients": true,
+    "requestedReceipts": [],
+    "to": [
+        {
+            "email": [
+                "mailto:hashimh399@gmail.com",
+                "mailto:hmir3999@gmail.com"
+            ],
+            "correlationId": "",
+            "substitutions": {
+                "area": "",
+                "accountNumber": ""
+            }
+        }
+    ],
+    "substitutions": {
+        "offerName": "",
+        "value": ""
+    },
+    "cc": [
+        ""
+    ],
+    "bcc": [
+        ""
+    ],
+
+    "content": {
+        "type": "html",
+        "encoding": "utf-8",
+        "subject": "We are reaching you through web 465 because",
+        "replyTo": "",
+        "text": "We are reaching you for next  asdsadasd   SSL genre if",
+        "html": ""
+    }
+}'

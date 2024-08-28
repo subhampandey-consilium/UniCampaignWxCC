@@ -1,0 +1,336 @@
+foreach (var sequence in allSequences.Items)
+{
+    Campaign campaign = await _campaignRepository.GetByIdAsync(sequence.CampaignId);
+    _logger.LogInformation($"Processing {sequence.Name} Sequence started");
+    // for each sequence create LeadListDto to create list 
+    List<PhoneColumnDto> listDtophoneColumns = new List<PhoneColumnDto>();
+    listDtophoneColumns.Add(new PhoneColumnDto()
+    {
+        ColumnName = "Phone",
+        Type = "Cell"
+    });
+    LeadListDto leadListDto = new LeadListDto();
+    leadListDto.Name = sequence.Name + $"{DateTime.Now.Day}" + $"{DateTime.Now.Month}" + $"{DateTime.Now.Year}" + $"{DateTime.Now.Hour}" + $"{DateTime.Now.Minute}" + $"{DateTime.Now.Second}" + $"{DateTime.Now.Millisecond}";
+    leadListDto.Purpose = ListPurpose.Voice;
+    leadListDto.Delimiter = Delimiter.Comma.ToString();
+    leadListDto.ContainHeaders = true;
+    leadListDto.SourceId = sequence.DataSourceId;
+    leadListDto.PhoneColumns = listDtophoneColumns;
+    _logger.LogInformation($"creating list {sequence.Name} started");
+    try
+    {
+        var existingList = await _leadListRepository.FirstOrDefaultAsync(x => x.Name.Equals(leadListDto.Name));
+        if (existingList is not null)
+        {
+            throw new DuplicateEntityFoundException("List name is already exist");
+        }
+
+        // Create a List on genesys for the assignement and store genesys list Id.
+        GenesysListEntity genesysListEntity = new();
+        genesysListEntity.Name = leadListDto.Name;
+        genesysListEntity.Division = new GenesysEntityRef()
+        {
+            Id = _configuration.GetValue<Guid>("UniCampaign:GenesysDivision:Id"),
+            Name = _configuration.GetValue<string>("UniCampaign:GenesysDivision:Name")
+        };
+
+        List<PhoneColumns> phoneColumns = new List<PhoneColumns>();
+        var phoneColumnEntities = new List<PhoneColumnEntity>();
+
+        List<string> columnNames = _configuration.GetSection("UniCampaign:ListColumnNames").Get<List<string>>();
+        foreach (var item in leadListDto.PhoneColumns)
+        {
+            if (PhoneHeaders.IndexedPhoneHeaders.ContainsKey(item.HeaderIndex))
+            {
+                string columnName = PhoneHeaders.IndexedPhoneHeaders[Int32.Parse(sequence.PhoneNumber)];
+                phoneColumns.Add(new PhoneColumns()
+                {
+                    ColumnName = columnName,
+                    Type = item.Type
+                });
+
+                phoneColumnEntities.Add(new PhoneColumnEntity()
+                {
+                    HeaderIndex = item.HeaderIndex,
+                    ColumnName = columnName,
+                    Type = item.Type,
+                });
+                columnNames.Add(columnName);
+            }
+        }
+
+        columnNames.Add("ContactPriority");
+        genesysListEntity.ColumnNames = columnNames;
+        genesysListEntity.PhoneColumns = phoneColumns;
+
+        List<ColumnDataTypeSpecifications> columnDataTypeSpecifications = new();
+        columnDataTypeSpecifications.Add(new ColumnDataTypeSpecifications()
+        {
+            ColumnName = "ContactPriority",
+            ColumnDataType = "NUMERIC",
+            Min = 0,
+            Max = short.MaxValue
+        });
+
+        if (leadListDto.ColumnDataTypeSpecifications?.Count > 0)
+        {
+            foreach (var item in leadListDto.ColumnDataTypeSpecifications)
+            {
+                columnDataTypeSpecifications.Add(new ColumnDataTypeSpecifications()
+                {
+                    ColumnDataType = item.ColumnDataType,
+                    ColumnName = item.ColumnName,
+                    Max = item.Max,
+                    Min = item.Min,
+                    MaxLength = item.MaxLength
+                });
+
+                if (!columnNames.Contains(item.ColumnName))
+                    columnNames.Add(item.ColumnName);
+            }
+        }
+        genesysListEntity.ColumnDataTypeSpecifications = columnDataTypeSpecifications;
+        _logger.LogInformation($"Creating sequence lead {sequence.Name} on genesys ");
+        var createdGenesysList = await _listManagementClient.SaveListAsync(tenantEntity.Id, genesysListEntity);
+
+        LeadList entity = new();
+        if (createdGenesysList.Id != default)
+        {
+            LeadList leadList = _mapper.Map<LeadList>(leadListDto);
+            leadList.Id = createdGenesysList.Id;
+            leadList.PhoneColumns = phoneColumnEntities;
+            entity = await _leadListRepository.AddAsync(leadList);
+            sequence.Status = SequenceStatus.Processed;
+            _sequenceRepository.Update(sequence);
+            bool isSaved = await _uow.SaveChangesAsync() > 0;
+            _logger.LogInformation($"Sequence Lead {sequence.Name} is created ");
+            if (isSaved)
+            {
+                _logger.LogInformation($"Assigning sequence lead {sequence.Name} to campaign {campaign.Name} started");
+                CampaignLeadList campaignLeadList = _mapper.Map<CampaignLeadList>(sequence);
+                campaignLeadList.LeadListId = leadList.Id;
+                campaignLeadList.Id = 0;
+                GenesysCampaignEntity genesyscampaign = await _campaignClient.GetCampaignById(tenantEntity.Id, campaign.Id);
+                if (campaign is null) throw new EntityNotFoundException($"Campaign does not exists in Genesys with ID: {campaign.Id}");
+
+                if (campaign.DialingPreference == DialingPreference.Weightage)
+                {
+                    genesyscampaign.ContactList = new GenesysEntityRef()
+                    {
+                        Id = campaign.DefaultListId,
+                        Name = campaign.DefaultListName
+                    };
+                    genesyscampaign = await _campaignClient.SaveAsync(tenantEntity.Id, genesyscampaign);
+                }
+                else if (campaign.DialingPreference == DialingPreference.Priority)
+                {
+                    var genesysLeadList = await _listManagementClient.GetListById(tenantEntity.Id, campaignLeadList.LeadListId);
+                    if (genesysLeadList is null) throw new EntityNotFoundException($"List does not exists in Genesys.");
+
+                    int leastPriority = 0;
+                    if (campaignLeadList.Recurrence == RecurrenceType.Single || campaignLeadList.Recurrence == RecurrenceType.Incremental || campaignLeadList.Recurrence == RecurrenceType.Repetitive)
+                    {
+                        leastPriority = await GetNextPriority(campaign.Id);
+                    }
+                    campaignLeadList.Priority = leastPriority;
+
+
+                    if (GenesysCampaignEntity.IsOn(genesyscampaign.CampaignStatus)) throw new ApplicationException($"Records are already dialing from {campaign.Name}. Please wait for sometime");
+
+                    var list = await _listManagementClient.GetListById(tenantEntity.Id, campaignLeadList.LeadListId);
+
+
+                    var contactSort = new ContactSort()
+                    {
+                        FieldName = "ContactPriority",
+                        Direction = "DESC",
+                        Numeric = true
+                    };
+                    genesyscampaign = await _campaignClient.SaveAsync(tenantEntity.Id, genesyscampaign);
+
+                }
+                try
+                {
+                    campaignLeadList.Status = ListStatus.Assigned;
+
+
+                    campaignLeadList = await _campaignLeadListRepository.AddAsync(campaignLeadList);
+                    bool isAssigned = await _uow.SaveChangesAsync() > 0;
+
+                    if (isSaved)
+                    {
+                        _logger.LogInformation($"Lead {leadListDto.Name} with sequence {sequence.Name} assigned into campaign {campaign.Name} ");
+                        //_logger.LogInformation($"List with {campaignLeadList.LeadListId} is assigned to Campaign with id {campaignLeadList.CampaignId}");
+                        //await _eventPublisher.PublishAsync(new ListAssignedIntoCampaignEvent(tenantEntity.Id, campaignLeadList.Id));
+                        //_logger.LogInformation($"ListPreProcessor Event is published with leadId {campaignLeadList.Id}");
+                        _logger.LogInformation($"Schedule processor started for campaignleadlist {campaignLeadList.Id}");
+                        bool isAppendLeadRequest = false;
+                        List<DialerDetailEntity> dialerDetailEntities = new();
+                        var dialStatusEntity = campaignLeadList.GetCampaignLeadDialStatusInstance();
+                        var dataSource = await _dataSourceRepository.GetByIdAsync(sequence.DataSourceId);
+                        leadList.DataSource = dataSource;
+                        IDataSourceClient _dataSourceClient = _dataSourceClientDelegate(DataSourceType.SFTP);
+                        _logger.LogInformation($"fetching fields to read for sequence");
+                        IEnumerable<KeyValuePair<string, string>> fieldsToRead = await _dataSourceClient.GetSequenceHeaderMapAsync(leadList, campaign);
+                        if (!string.IsNullOrEmpty(campaignLeadList.ContactSelectionRule))
+                        {
+                            var csrEntity = await _csrRepository.FirstOrDefaultAsync(x => x.Id == Guid.Parse(campaignLeadList.ContactSelectionRule), includes: x => x.CSRConditions);
+                            var filters = new List<ContactSelectionRuleEntity>
+                            {
+                                    csrEntity
+                            };
+                            leadList.Filters = filters;
+                        }
+                        string campaignName = campaignLeadList.Campaign.Name;
+                        var contentTuple = await _dataSourceClient.GetContentAsync(leadList, fieldsToRead, campaignLeadList?.LastReadOffset, campaignName);
+                        _logger.LogInformation($"{contentTuple.Item2.Rows.Count} records found in lead:: {leadList.Name}");
+
+                        if (contentTuple.Item2.Rows.Count > 0)
+                        {
+                            _logger.LogInformation($"Fetched content for Campaign:: {campaignLeadList.CampaignId}, Lead:: {leadList.Name}, map:: {campaignLeadList.Id}");
+
+                            // Data Mapppings for CampaignLeadDialStatus Entity.
+                            dialStatusEntity.MapId = campaignLeadList.Id;
+                            campaignLeadList.LastReadOffset = contentTuple.Item1;
+                            sequence.LastReadOffset = contentTuple.Item1;
+
+                            // Data Mappings for DialerDetailEntity entity.
+                            foreach (DataRow row in contentTuple.Item2.Rows)
+                            {
+                                var ddEntity = GetMappedDialerDetailEntity(row, campaignLeadList, fieldsToRead.ToList());
+                                if (ddEntity.UniqueIdentifier != null)
+                                    if (dialerDetailEntities.Exists(x => x.UniqueIdentifier == ddEntity.UniqueIdentifier))
+                                    {
+                                        ddEntity.Status = RecordStatus.Duplicate;
+                                        dialStatusEntity.TotalDuplicate += 1;
+                                    }
+
+                                if (campaignLeadList.FilterDuplicate)
+                                    if (dialerDetailEntities.Exists(e => e.PhoneNumber == ddEntity.PhoneNumber))
+                                    {
+                                        ddEntity.Status = RecordStatus.Duplicate;
+                                        continue;
+                                    }
+
+                                //dialerDetailEntities.Add(ddEntity);
+                                //dialStatusEntity.TotalRecords += 1;
+
+                                if (campaignLeadList.ContactSelectionRule != "" && campaignLeadList.ContactSelectionRule != null)
+                                {
+                                    dialerDetailEntities.Add(ddEntity);
+                                    dialStatusEntity.TotalFilteredRecords += 1;
+                                    dialStatusEntity.TotalRecords += 1;
+                                    var content = await _dataSourceClient.ReadCsvOrTxtFileContentAsync(leadList, campaignLeadList?.LastReadOffset);
+                                    _logger.LogInformation($"{content.Item2} records found in lead:: {leadList.Name}");
+                                    dialStatusEntity.TotalRecords += 1;
+                                }
+                                else
+                                {
+                                    dialerDetailEntities.Add(ddEntity);
+                                    dialStatusEntity.TotalRecords += 1;
+                                    dialStatusEntity.TotalFilteredRecords = 0;
+                                }
+                            }
+
+                            // Mark Map to PreProcessed Status.
+                            campaignLeadList.Status = ListStatus.PreProcessed;
+
+                            await _dialerDetailRepository.AddBulkAsync(dialerDetailEntities);
+                            if (campaignLeadList.Recurrence != RecurrenceType.Single)
+                            {
+                                campaignLeadList.NextRecurrenceScheduledAt = DateTime.UtcNow;
+                                campaignLeadList.UpdateRecurrenceInterval();
+                                campaignLeadList.CampaignLeadDialStatus = dialStatusEntity;
+                            }
+                           
+
+                            if (campaignLeadList.Campaign.ThresholdConfiguration != null)
+                            {
+                                var thresholdConfig = campaignLeadList.Campaign.ThresholdConfiguration.ThresholdConditions.FirstOrDefault(c => IsMatch(dialStatusEntity.TotalRecords, c));
+                                if (thresholdConfig is not null)
+                                {
+                                    if (thresholdConfig.ThresholdType == ThresholdType.Fixed)
+                                    {
+                                        campaignLeadList.ContactMetaData.ThresholdTarget = (int)thresholdConfig.ThresholdTargetValue;
+                                        campaignLeadList.ContactMetaData.ThresholdType = ThresholdType.Fixed;
+                                    }
+                                    else if (thresholdConfig.ThresholdType == ThresholdType.Percentage)
+                                    {
+                                        campaignLeadList.ContactMetaData.ThresholdTarget = (int)thresholdConfig.ThresholdTargetValue;
+                                        campaignLeadList.ContactMetaData.ThresholdType = ThresholdType.Percentage;
+                                    }
+                                }
+                                else
+                                {
+                                    // Apply Default threshold configuration.
+                                    campaignLeadList.ContactMetaData.ThresholdTarget = (int)campaignLeadList.Campaign.ThresholdConfiguration.DefaultThresholdValue;
+                                    campaignLeadList.ContactMetaData.ThresholdType = campaignLeadList.Campaign.ThresholdConfiguration.DefaultThresholdType;
+                                }
+                            }
+
+                            _campaignLeadDialStatusRepository.Update(dialStatusEntity);
+                            _campaignLeadListRepository.Update(campaignLeadList);
+                            bool isRead = await _uow.SaveChangesAsync() > 0;
+                            if (isRead)
+                            {
+                                sequence.Status = SequenceStatus.Scheduled;
+                                _sequenceRepository.Update(sequence);
+                                await _uow.SaveChangesAsync();
+                            }
+                            _logger.LogInformation($"Saved {dialerDetailEntities.Count} records into dialer detail.");
+                            //var isListArcheived = await _dataSourceClient.IsListArcheived(contentTuple.Item1, campaignName);
+                            //if (isListArcheived)
+                            //    _logger.LogInformation("List archeived");
+                            //else
+                            //{
+                            //    _logger.LogError("Error in saving data to dialer details page due to list not archeived");
+                            //}
+                        }
+                       
+
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Error while assigning Lead into Campaign::{campaignLeadList.CampaignId}", ex);
+                    throw;
+                }
+
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError($"Error while creating sequence lead  {ex}");
+    }
+
+    // when list is created then assign it to campaign with rechurrence type repetative
+}
+
+
+
+
+
+
+
+
+
+Last week i have worked on UniCampaign for WebexCC i which i have deployed the new UniCampaign build with SMS
+Email feature on AWS server and tested it also it is working fine
+aftet that worked on webexcc agent desktop gadget previously we were using it when agnet change it status to available then
+callback request was getting generated but if agnet is on available state then it will not geerate callback
+so for thisi have updated the code logic and implemented that after 5 sec it will check if agent is in avaioable state 
+then generate a callabck on agnet behalf 
+i am working on it it is not tested yet 
+also i have implemented the SMS campaign with webex connect now we can also use webex conenct enviornment for sending 
+sms in UniCampaign FOr webexcc
+
+
+
+
+
+
+
+
+
+

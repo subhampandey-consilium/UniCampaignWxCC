@@ -1,0 +1,38 @@
+Hello, 
+Welcome, Consilium UniCampaign inside UniHub is a list and campaign management solution for Amazon Connect.
+
+UniHub streamlines the process of running campaigns on Amazon Connect with a simple and user-friendly campaign and list management solution
+
+Lets login to UniHub using admin credentials.
+
+once logged in, on the homepage we would see UniCampaign tab. Inside UniCampaign
+(Source Management)
+We have Source Management. Under the Source Management, you can create multiple data-sources for leads which will be used for creating contact lists. UniCampaign supports 
+multiple data-sources like Local Directory, FTP/SFTP,  leading CRMs, like Salesforce,  MS Dynamics etc.
+
+(List Management)
+Now, coming to the (List Management) – Under list management, we can manage multiple calling 
+lists.Lists can be created using data-source we created in Source Management.To create a list, we need to provide some basic information like Name, Description, List Purpose, Source type and
+delimiter within contact list.UniCampaign provide options to upload txt and csv files with Comma or Pipe separated data, also we can split the list on the basis of different operators and the 
+another feature of list management is list split action through this we can come to know wheather listed is splited or not.
+
+(Campaign Management---Voice)
+Now Coming to Campaign Management Here we have three different types of campaign as we can see voice campaign, Email campaign, SMS campaign from here we can manage all outbound campaigns. 
+starting with voice campaign We need to add few basic information while creating a new campaign like on basic info tab Campaign Name,description, Campaign type, Batch Size for campaign, Dialing 
+Preference On Time setting tab Time Zone,Country, campaign start date, end date,start time ,end time now moving to next tab DNC list (Do not call) Here we can map any DNC list if we have any 
+moving on to next tab dialing mode options on this tab we need to select the dailing mode option, agent script, records per agent, Engagement window, Threshold value moving forward to next tab 
+campaign option here we need to select caller ID and caller name moving to next tab threshold configuration tab on this tab we some optional information that we can provide in the form of operators 
+on the basis of wrap up code.Now moving on to last tab which is omnichannel orchestration tab this is also one of the optional tab through this tab we can send email or sms to the customer. 
+in case of any unattended calls.
+
+(DNC-----DO not call list)
+Now Moving on to next feature DNC here we can define the number on which we want to activate the DNC we can create a DNC list and can map it to the campaign to create a DNC list we need to provide 
+DNC list name, Type and source.
+
+(Administration-----Role Management)
+Apart from this in Administration section we have Role management through this we can provide the user role base access to to the application.we can simply create a role by providing the name and 
+access type.
+
+(Omnichannel orchestration)
+Moving on to last but not the least Omnichannel orchestration through this we can notify a customer through email and SMS if a call goes unattended in case of out bond campaign we can easily create
+Omnichannel orchestration for email and SMS by configuring template and message for email and SMS and then mapping it the campaign.

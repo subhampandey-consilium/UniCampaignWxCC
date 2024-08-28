@@ -1,0 +1,10 @@
+phoneNumber,firstName,lastName,LoanType,Bank
+9919426941,Yogendra,Gupta,Car,HSBC
+9956049070,Ajay,Gupta,Home,HSBC
+9919426941,Yogendra,Gupta,Business,HSBC
+9919426941,Yogendra,Gupta,Car,HSBC
+9956049070,Ajay,Gupta,Home,HSBC
+9919426941,Yogendra,Gupta,Business,HSBC
+9919426941,Yogendra,Gupta,Car,HSBC
+9956049070,Ajay,Gupta,Home,HSBC
+9919426941,Yogendra,Gupta,Business,HSBC

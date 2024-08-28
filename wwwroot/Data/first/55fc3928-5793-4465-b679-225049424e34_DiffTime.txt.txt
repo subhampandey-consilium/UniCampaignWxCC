@@ -1,0 +1,2 @@
+Clinetid,FirstName,LastName,Phone01,Phone02,Dialwindow01,Dialwindow02,Dialwindow03
+01,Pooja,Singh1,9621789501,9919426941,12:00-12:30|Phone01,12:36-12:40|Phone02,12:32-12:35|Phone01
